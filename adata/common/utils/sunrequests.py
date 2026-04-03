@@ -10,6 +10,7 @@
 
 import threading
 import time
+from urllib.parse import urlparse
 
 import requests
 
@@ -41,10 +42,132 @@ class SunProxy(object):
             del cls._data[key]
 
 
+class RateLimiter(object):
+    """
+    频率限制器，按域名控制请求频率
+    """
+    _instance = None
+    _instance_lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        if RateLimiter._instance is None:
+            with RateLimiter._instance_lock:
+                if RateLimiter._instance is None:
+                    RateLimiter._instance = object.__new__(cls)
+        return RateLimiter._instance
+
+    def __init__(self, default_max_requests=30, time_window=60):
+        """
+        初始化频率限制器
+        :param default_max_requests: 默认每分钟最大请求数
+        :param time_window: 时间窗口（秒），默认60秒
+        """
+        if not hasattr(self, '_initialized'):
+            self._default_max_requests = default_max_requests
+            self._time_window = time_window
+            # 存储每个域名的请求时间戳列表 {host: [timestamp1, timestamp2, ...]}
+            self._requests_record = {}
+            self._custom_limits = {}  # 存储自定义限制 {host: max_requests}
+            self._lock = threading.Lock()
+            self._initialized = True
+
+    def set_default_limit(self, max_requests_per_minute):
+        """
+        设置默认的频率限制
+        :param max_requests_per_minute: 每分钟最大请求数
+        """
+        self._default_max_requests = max_requests_per_minute
+
+    def set_host_limit(self, host, max_requests_per_minute):
+        """
+        为特定域名设置频率限制
+        :param host: 域名，例如 'api.example.com'
+        :param max_requests_per_minute: 每分钟最大请求数
+        """
+        self._custom_limits[host] = max_requests_per_minute
+
+    def _get_host_limit(self, host):
+        """
+        获取指定域名的频率限制
+        """
+        return self._custom_limits.get(host, self._default_max_requests)
+
+    def _get_host(self, url):
+        """
+        从URL中提取域名
+        """
+        try:
+            parsed = urlparse(url)
+            return parsed.netloc
+        except Exception:
+            return url
+
+    def acquire(self, url):
+        """
+        获取请求许可，如果达到限制则等待
+        :param url: 请求的URL
+        :return: 实际等待的时间（秒）
+        """
+        host = self._get_host(url)
+        max_requests = self._get_host_limit(host)
+
+        with self._lock:
+            now = time.time()
+
+            # 初始化该域名的记录
+            if host not in self._requests_record:
+                self._requests_record[host] = []
+
+            # 清理过期的记录（超出时间窗口的）
+            cutoff_time = now - self._time_window
+            self._requests_record[host] = [
+                ts for ts in self._requests_record[host] if ts > cutoff_time
+            ]
+
+            # 检查是否达到限制
+            if len(self._requests_record[host]) >= max_requests:
+                # 需要等待的时间 = 最早请求的时间 + 时间窗口 - 当前时间
+                wait_time = self._requests_record[host][0] + self._time_window - now
+                if wait_time > 0:
+                    # 释放锁后再等待，避免阻塞其他域名的请求
+                    pass
+                else:
+                    wait_time = 0
+            else:
+                wait_time = 0
+
+        # 在锁外等待
+        if wait_time > 0:
+            time.sleep(wait_time)
+            now = time.time()
+
+        # 记录本次请求
+        with self._lock:
+            self._requests_record[host].append(now)
+
+        return wait_time
+
+
 class SunRequests(object):
     def __init__(self, sun_proxy: SunProxy = None) -> None:
         super().__init__()
         self.sun_proxy = sun_proxy
+        self._rate_limiter = RateLimiter()
+
+    def set_rate_limit(self, max_requests_per_minute):
+        """
+        设置默认的频率限制（每分钟请求数）
+        :param max_requests_per_minute: 每分钟最大请求数，默认30
+        """
+        self._rate_limiter.set_default_limit(max_requests_per_minute)
+
+    def set_host_rate_limit(self, host, max_requests_per_minute):
+        """
+        为特定域名设置频率限制
+        :param host: 域名，例如 'api.example.com'
+        :param max_requests_per_minute: 每分钟最大请求数
+        """
+        self._rate_limiter.set_host_limit(host, max_requests_per_minute)
 
     def request(self, method='get', url=None, times=3, retry_wait_time=1588, proxies=None, wait_time=None, **kwargs):
         """
@@ -58,6 +181,9 @@ class SunRequests(object):
         :param kwargs: 其它 requests 参数，用法相同
         :return: res
         """
+        # 0. 频率限制检查
+        self._rate_limiter.acquire(url)
+
         # 1. 获取设置代理
         proxies = self.__get_proxies(proxies)
         # 2. 请求数据结果

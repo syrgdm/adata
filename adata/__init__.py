@@ -10,7 +10,7 @@ import logging
 
 from adata.__version__ import __version__
 from adata.bond import bond
-from adata.common.utils.sunrequests import SunProxy
+from adata.common.utils.sunrequests import SunProxy, sun_requests
 from adata.fund import fund
 from adata.sentiment import sentiment
 from adata.stock import stock
@@ -31,6 +31,23 @@ def proxy(is_proxy=False, ip: str = None, proxy_url: str = None):
     SunProxy.set('ip', ip)
     SunProxy.set('proxy_url', proxy_url)
     return
+
+
+def set_rate_limit(max_requests_per_minute=30):
+    """
+    设置请求频率限制（按域名控制）
+    :param max_requests_per_minute: 每分钟最大请求数，默认30次
+    """
+    sun_requests.set_rate_limit(max_requests_per_minute)
+
+
+def set_host_rate_limit(host, max_requests_per_minute):
+    """
+    为特定域名设置请求频率限制
+    :param host: 域名，例如 'push2.eastmoney.com'
+    :param max_requests_per_minute: 每分钟最大请求数
+    """
+    sun_requests.set_host_rate_limit(host, max_requests_per_minute)
 
 
 # set up logging
