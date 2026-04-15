@@ -5,13 +5,15 @@
 @desc: adata 请求工具类
 @author: 1nchaos
 @time:2023/3/30
-@log: 封装请求次数
+@log: 封装请求次数，集成限流器
 """
 
 import threading
 import time
 
 import requests
+
+from adata.common.utils.rate_limiter import rate_limiter
 
 
 class SunProxy(object):
@@ -46,21 +48,39 @@ class SunRequests(object):
         super().__init__()
         self.sun_proxy = sun_proxy
 
-    def request(self, method='get', url=None, times=3, retry_wait_time=1588, proxies=None, wait_time=None, **kwargs):
+    def request(
+        self, 
+        method='get', 
+        url=None, 
+        times=3, 
+        retry_wait_time=1588, 
+        proxies=None, 
+        wait_time=None,
+        rate_limit=True,  # 新增：是否启用限流
+        **kwargs
+    ):
         """
         简单封装的请求，参考requests，增加循环次数和次数之间的等待时间
+        
         :param proxies: 代理配置
         :param method: 请求方法： get；post
         :param url: url
         :param times: 次数，int
         :param retry_wait_time: 重试等待时间，毫秒
         :param wait_time: 等待时间：毫秒；表示每个请求的间隔时间，在请求之前等待sleep，主要用于防止请求太频繁的限制。
+        :param rate_limit: 是否启用限流，默认True。启用后会根据域名限流配置进行请求控制。
         :param kwargs: 其它 requests 参数，用法相同
         :return: res
         """
-        # 1. 获取设置代理
+        # 1. 限流控制
+        if rate_limit and url:
+            # 获取限流许可（阻塞等待）
+            rate_limiter.acquire(url)
+        
+        # 2. 获取设置代理
         proxies = self.__get_proxies(proxies)
-        # 2. 请求数据结果
+        
+        # 3. 请求数据结果
         res = None
         for i in range(times):
             if wait_time:
@@ -90,4 +110,46 @@ class SunRequests(object):
         return proxies
 
 
+# 全局请求实例
 sun_requests = SunRequests()
+
+
+# 便捷函数：直接通过模块调用
+def request(
+    method='get', 
+    url=None, 
+    times=3, 
+    retry_wait_time=1588, 
+    proxies=None, 
+    wait_time=None,
+    rate_limit=True,
+    **kwargs
+):
+    """
+    便捷请求函数，自动集成限流功能
+    
+    :param rate_limit: 是否启用限流，默认True
+    """
+    return sun_requests.request(
+        method=method,
+        url=url,
+        times=times,
+        retry_wait_time=retry_wait_time,
+        proxies=proxies,
+        wait_time=wait_time,
+        rate_limit=rate_limit,
+        **kwargs
+    )
+
+
+# 便捷函数：GET请求
+def get(url, params=None, **kwargs):
+    """GET请求，自动集成限流"""
+    kwargs.setdefault('allow_redirects', True)
+    return request('get', url, params=params, **kwargs)
+
+
+# 便捷函数：POST请求
+def post(url, data=None, json=None, **kwargs):
+    """POST请求，自动集成限流"""
+    return request('post', url, data=data, json=json, **kwargs)
