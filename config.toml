@@ -1,0 +1,30 @@
+# ============================================================
+# AData 限流配置文件
+# ============================================================
+# 说明：
+# - enabled: 是否启用限流，true 启用，false 禁用
+# - default_max_requests: 默认时间窗口内最大请求数
+# - default_window_seconds: 默认时间窗口大小（秒）
+# - domain_configs: 按域名差异化配置（可选）
+#   - key: 域名（不区分大小写）
+#   - max_requests: 该域名时间窗口内最大请求数
+#   - window_seconds: 该域名时间窗口大小（秒）
+# ============================================================
+
+[rate_limit]
+enabled = true
+default_max_requests = 30
+default_window_seconds = 60
+
+# 按域名差异化配置示例（根据实际需要取消注释并修改）
+[rate_limit.domain_configs."push2.eastmoney.com"]
+max_requests = 100
+window_seconds = 60
+
+[rate_limit.domain_configs."d.10jqka.com.cn"]
+max_requests = 50
+window_seconds = 60
+
+[rate_limit.domain_configs."hq.sinajs.cn"]
+max_requests = 60
+window_seconds = 60

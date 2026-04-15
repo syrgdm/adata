@@ -6,6 +6,8 @@
 @log: 验证滑动窗口限流功能
 """
 
+import os
+import tempfile
 import threading
 import time
 import unittest
@@ -15,7 +17,9 @@ from adata.common.utils.rate_limiter import (
     DomainRateLimiter,
     RateLimiterManager,
     rate_limiter_manager,
-    rate_limit_config
+    rate_limit_config,
+    _load_config_from_file,
+    _find_config_file
 )
 
 
@@ -166,6 +170,108 @@ class TestConcurrency(unittest.TestCase):
         
         zero_wait_count = sum(1 for w in results if w == 0)
         self.assertEqual(zero_wait_count, 10)
+
+
+class TestConfigFileLoading(unittest.TestCase):
+    """配置文件加载测试"""
+    
+    def test_load_config_from_file(self):
+        """测试从配置文件加载"""
+        config = _load_config_from_file()
+        
+        self.assertIn('enabled', config)
+        self.assertIn('default_max_requests', config)
+        self.assertIn('default_window_seconds', config)
+        self.assertIn('domain_configs', config)
+    
+    def test_config_file_with_env_variable(self):
+        """测试通过环境变量指定配置文件"""
+        with tempfile.NamedTemporaryFile(
+            mode='w', 
+            suffix='.toml', 
+            delete=False,
+            encoding='utf-8'
+        ) as f:
+            f.write('''
+[rate_limit]
+enabled = false
+default_max_requests = 100
+default_window_seconds = 120
+
+[rate_limit.domain_configs."test.example.com"]
+max_requests = 200
+window_seconds = 30
+''')
+            temp_path = f.name
+        
+        try:
+            original_env = os.environ.get('ADATA_CONFIG')
+            os.environ['ADATA_CONFIG'] = temp_path
+            
+            config = _load_config_from_file()
+            
+            self.assertFalse(config['enabled'])
+            self.assertEqual(config['default_max_requests'], 100)
+            self.assertEqual(config['default_window_seconds'], 120)
+            self.assertIn('test.example.com', config['domain_configs'])
+            
+            max_req, window = config['domain_configs']['test.example.com']
+            self.assertEqual(max_req, 200)
+            self.assertEqual(window, 30)
+            
+        finally:
+            if original_env is not None:
+                os.environ['ADATA_CONFIG'] = original_env
+            else:
+                os.environ.pop('ADATA_CONFIG', None)
+            os.unlink(temp_path)
+    
+    def test_config_reload(self):
+        """测试配置重新加载"""
+        with tempfile.NamedTemporaryFile(
+            mode='w', 
+            suffix='.toml', 
+            delete=False,
+            encoding='utf-8'
+        ) as f:
+            f.write('''
+[rate_limit]
+enabled = true
+default_max_requests = 50
+default_window_seconds = 30
+''')
+            temp_path = f.name
+        
+        try:
+            original_env = os.environ.get('ADATA_CONFIG')
+            os.environ['ADATA_CONFIG'] = temp_path
+            
+            config = RateLimitConfig()
+            config._config_file_loaded = False
+            config.load_from_file(force=True)
+            
+            self.assertEqual(config.default_max_requests, 50)
+            self.assertEqual(config.default_window_seconds, 30)
+            
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                f.write('''
+[rate_limit]
+enabled = true
+default_max_requests = 80
+default_window_seconds = 45
+''')
+            
+            config.reload_config()
+            
+            self.assertEqual(config.default_max_requests, 80)
+            self.assertEqual(config.default_window_seconds, 45)
+            
+        finally:
+            if original_env is not None:
+                os.environ['ADATA_CONFIG'] = original_env
+            else:
+                os.environ.pop('ADATA_CONFIG', None)
+            os.unlink(temp_path)
 
 
 if __name__ == '__main__':

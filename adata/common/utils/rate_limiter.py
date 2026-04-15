@@ -6,11 +6,108 @@
 @log: 实现按域名的请求限流，防止触发第三方风控
 """
 
+import os
+import sys
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from urllib.parse import urlparse
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    try:
+        import tomli as tomllib
+    except ImportError:
+        tomllib = None
+
+
+def _find_config_file() -> Optional[str]:
+    """
+    查找配置文件路径
+    
+    按以下顺序查找（优先级从高到低）：
+    1. 环境变量 ADATA_CONFIG 指定的路径
+    2. 当前工作目录下的 config.toml
+    3. 项目根目录下的 config.toml
+    
+    Returns:
+        配置文件路径，未找到返回 None
+    """
+    env_config = os.environ.get('ADATA_CONFIG')
+    if env_config and Path(env_config).exists():
+        return env_config
+    
+    cwd_config = Path.cwd() / 'config.toml'
+    if cwd_config.exists():
+        return str(cwd_config)
+    
+    package_root = Path(__file__).parent.parent.parent.parent
+    root_config = package_root / 'config.toml'
+    if root_config.exists():
+        return str(root_config)
+    
+    return None
+
+
+def _load_config_from_file() -> Dict[str, Any]:
+    """
+    从配置文件加载限流配置
+    
+    Returns:
+        限流配置字典
+    """
+    config: Dict[str, Any] = {
+        'enabled': True,
+        'default_max_requests': 30,
+        'default_window_seconds': 60,
+        'domain_configs': {}
+    }
+    
+    config_path = _find_config_file()
+    if not config_path:
+        return config
+    
+    if tomllib is None:
+        import warnings
+        warnings.warn(
+            "TOML 解析库不可用，请安装 tomli (pip install tomli) 以支持配置文件读取。"
+            "将使用默认限流配置。",
+            RuntimeWarning
+        )
+        return config
+    
+    try:
+        with open(config_path, 'rb') as f:
+            data = tomllib.load(f)
+        
+        rate_limit_config = data.get('rate_limit', {})
+        
+        if 'enabled' in rate_limit_config:
+            config['enabled'] = bool(rate_limit_config['enabled'])
+        
+        if 'default_max_requests' in rate_limit_config:
+            config['default_max_requests'] = int(rate_limit_config['default_max_requests'])
+        
+        if 'default_window_seconds' in rate_limit_config:
+            config['default_window_seconds'] = int(rate_limit_config['default_window_seconds'])
+        
+        domain_configs = rate_limit_config.get('domain_configs', {})
+        for domain, domain_config in domain_configs.items():
+            max_requests = domain_config.get('max_requests', config['default_max_requests'])
+            window_seconds = domain_config.get('window_seconds', config['default_window_seconds'])
+            config['domain_configs'][domain.lower()] = (int(max_requests), int(window_seconds))
+            
+    except Exception as e:
+        import warnings
+        warnings.warn(
+            f"加载限流配置文件失败: {e}，将使用默认配置。",
+            RuntimeWarning
+        )
+    
+    return config
 
 
 class RateLimitConfig:
@@ -18,6 +115,7 @@ class RateLimitConfig:
     限流配置类
     
     支持全局默认配置和按域名差异化配置
+    支持从配置文件自动加载配置
     """
     
     _instance_lock = threading.Lock()
@@ -35,11 +133,45 @@ class RateLimitConfig:
         if self._initialized:
             return
         self._initialized = True
+        self._lock = threading.Lock()
+        self._config_file_loaded = False
         self._default_max_requests = 30
         self._default_window_seconds = 60
         self._domain_configs: Dict[str, tuple] = {}
         self._enabled = True
-        self._lock = threading.Lock()
+    
+    def load_from_file(self, force: bool = False) -> bool:
+        """
+        从配置文件加载限流配置
+        
+        Args:
+            force: 是否强制重新加载
+            
+        Returns:
+            是否成功加载配置
+        """
+        if self._config_file_loaded and not force:
+            return True
+        
+        config = _load_config_from_file()
+        
+        with self._lock:
+            self._enabled = config['enabled']
+            self._default_max_requests = config['default_max_requests']
+            self._default_window_seconds = config['default_window_seconds']
+            self._domain_configs = config['domain_configs'].copy()
+            self._config_file_loaded = True
+        
+        return True
+    
+    def reload_config(self) -> bool:
+        """
+        重新加载配置文件
+        
+        Returns:
+            是否成功重新加载
+        """
+        return self.load_from_file(force=True)
     
     @property
     def enabled(self) -> bool:
@@ -223,6 +355,7 @@ class RateLimiterManager:
         self._limiters: Dict[str, DomainRateLimiter] = {}
         self._lock = threading.Lock()
         self._config = RateLimitConfig()
+        self._config.load_from_file()
     
     @staticmethod
     def _extract_domain(url: str) -> str:
