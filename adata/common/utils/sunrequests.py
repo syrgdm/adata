@@ -5,13 +5,15 @@
 @desc: adata 请求工具类
 @author: 1nchaos
 @time:2023/3/30
-@log: 封装请求次数
+@log: 封装请求次数，集成按域名限流功能
 """
 
 import threading
 import time
 
 import requests
+
+from adata.common.utils.rate_limiter import rate_limiter_manager
 
 
 class SunProxy(object):
@@ -60,7 +62,9 @@ class SunRequests(object):
         """
         # 1. 获取设置代理
         proxies = self.__get_proxies(proxies)
-        # 2. 请求数据结果
+        # 2. 请求前限流检查（按域名限流）
+        rate_limiter_manager.before_request(url)
+        # 3. 请求数据结果
         res = None
         for i in range(times):
             if wait_time:
