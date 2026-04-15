@@ -5,13 +5,37 @@
 @desc: adata 请求工具类
 @author: 1nchaos
 @time:2023/3/30
-@log: 封装请求次数
+@log: 封装请求次数，新增速率限制功能
 """
 
+import functools
 import threading
 import time
 
 import requests
+
+from .rate_limit_config import RateLimitConfig
+from .rate_limiter import rate_limiter
+
+
+def with_rate_limit(func):
+    """
+    请求限流装饰器
+    低侵入式为请求方法添加速率限制功能
+    """
+    @functools.wraps(func)
+    def wrapper(self, method='get', url=None, times=3, retry_wait_time=1588,
+                proxies=None, wait_time=None, rate_limit=True, **kwargs):
+        if rate_limit and url:
+            RateLimitConfig.load_config()
+            wait_seconds = rate_limiter.acquire_with_wait_time(url)
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+
+        return func(self, method=method, url=url, times=times,
+                    retry_wait_time=retry_wait_time, proxies=proxies,
+                    wait_time=wait_time, **kwargs)
+    return wrapper
 
 
 class SunProxy(object):
@@ -46,6 +70,7 @@ class SunRequests(object):
         super().__init__()
         self.sun_proxy = sun_proxy
 
+    @with_rate_limit
     def request(self, method='get', url=None, times=3, retry_wait_time=1588, proxies=None, wait_time=None, **kwargs):
         """
         简单封装的请求，参考requests，增加循环次数和次数之间的等待时间

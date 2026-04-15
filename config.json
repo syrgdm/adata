@@ -1,0 +1,38 @@
+{
+  "rate_limit": {
+    "default": {
+      "limit": 30,
+      "window": 60
+    },
+    "domains": {
+      "push2.eastmoney.com": {
+        "limit": 60,
+        "window": 60
+      },
+      "push2his.eastmoney.com": {
+        "limit": 60,
+        "window": 60
+      },
+      "finance.pae.baidu.com": {
+        "limit": 45,
+        "window": 60
+      },
+      "stock.xueqiu.com": {
+        "limit": 20,
+        "window": 60
+      },
+      "api.money.126.net": {
+        "limit": 30,
+        "window": 60
+      },
+      "qt.gtimg.cn": {
+        "limit": 50,
+        "window": 60
+      },
+      "vip.stock.finance.sina.com.cn": {
+        "limit": 30,
+        "window": 60
+      }
+    }
+  }
+}
